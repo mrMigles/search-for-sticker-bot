@@ -1,20 +1,36 @@
 package main
 
 import (
+	"log"
 	"os"
+	"strings"
+	"sync"
 )
 
 type Bot interface {
 	startBot()
 }
 
-var botToken = GetEnv("BOT_TOKEN", "")
+var botTokens = GetEnv("BOT_TOKENS", "")
 
 func main() {
 	stickerResource := NewStickerResource()
-	stickerBot := NewStickerBot(botToken, stickerResource)
+	tokens := strings.Split(botTokens, ",")
 
-	stickerBot.startBot()
+	var wg sync.WaitGroup
+	wg.Add(len(tokens))
+
+	for _, token := range tokens {
+		stickerBot, err := NewStickerBot(token, stickerResource)
+		if err != nil {
+			log.Printf("Error init bot: %v", err)
+		} else {
+			go stickerBot.startBot()
+		}
+	}
+
+	wg.Wait()
+	log.Fatal("There are no active bots")
 }
 
 func GetEnv(key, fallback string) string {
