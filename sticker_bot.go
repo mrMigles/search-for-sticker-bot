@@ -128,6 +128,28 @@ func (s StickerBot) handleMessage(message *tgbotapi.Message) {
 				}
 			}
 		}
+
+		set, err := s.Bot.GetStickerSet(tgbotapi.GetStickerSetConfig{Name: message.Sticker.SetName})
+		if err != nil {
+			s.handleError(err, message)
+		}
+		stickerPack, err := s.Stickers.FindStickerPack(message.Sticker.SetName)
+		if stickerPack == nil {
+
+			err := s.Stickers.SaveStickerPack(&StickerPack{
+				Name:        set.Name,
+				Title:       set.Title,
+				NumStickers: len(set.Stickers),
+			})
+			if err != nil {
+				s.handleError(err, message)
+			}
+
+			err = s.Stickers.SaveStickersFromPack(convertTgStickersToLocal(set))
+			if err != nil {
+				s.handleError(err, message)
+			}
+		}
 		return
 	}
 
@@ -193,8 +215,16 @@ func (s StickerBot) handleMessage(message *tgbotapi.Message) {
 	}
 }
 
+func (s StickerBot) handleError(err error, message *tgbotapi.Message) {
+	log.Printf("Error: %v", err)
+	msg := tgbotapi.NewMessage(message.Chat.ID, "Что то пошло не так")
+	if _, err := s.Bot.Send(msg); err != nil {
+		log.Printf("Error: %v", err)
+	}
+}
+
 func (s StickerBot) handleInline(inline *tgbotapi.InlineQuery) {
-	if len(inline.Query) > 2 {
+	if len(inline.Query) > 0 {
 		user, err := s.Stickers.FindUser(inline.From.ID)
 		if err != nil {
 			log.Printf("Error: %v", err)
@@ -212,6 +242,9 @@ func (s StickerBot) handleInline(inline *tgbotapi.InlineQuery) {
 		var stickers []interface{}
 		foundStickers := s.Stickers.FindStickersByTextAndUser(inline.Query, *user)
 		for i, sticker := range foundStickers {
+			if i == 49 {
+				break
+			}
 			stickers = append(stickers, tgbotapi.InlineQueryResultCachedSticker{
 				Type:      "sticker",
 				ID:        strconv.Itoa(i),
@@ -244,4 +277,20 @@ func trim(s string, length int) string {
 	}
 
 	return s[:x]
+}
+
+func convertTgStickersToLocal(tgStickerPack tgbotapi.StickerSet) []Sticker {
+	var stickers []Sticker
+	for _, sticker := range tgStickerPack.Stickers {
+		stickers = append(stickers, Sticker{
+			FileId:       sticker.FileID,
+			UniqueFileId: sticker.FileUniqueID,
+			Text:         tgStickerPack.Title,
+			Emoji:        sticker.Emoji,
+			Pack:         sticker.SetName,
+			AddedBy:      0,
+			Private:      false,
+		})
+	}
+	return stickers
 }
