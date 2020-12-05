@@ -42,6 +42,9 @@ func (s StickerBot) startBot() {
 		if update.InlineQuery != nil {
 			s.handleInline(update.InlineQuery)
 		}
+		if update.ChosenInlineResult != nil {
+			s.handleResult(update.ChosenInlineResult)
+		}
 	}
 }
 
@@ -241,13 +244,20 @@ func (s StickerBot) handleInline(inline *tgbotapi.InlineQuery) {
 
 		var stickers []interface{}
 		foundStickers := s.Stickers.FindStickersByTextAndUser(inline.Query, *user)
+		offset, err := strconv.Atoi(inline.Offset)
+		if err != nil {
+			offset = 0
+		}
 		for i, sticker := range foundStickers {
-			if i == 49 {
+			if i < offset {
+				continue
+			}
+			if i == offset+50 {
 				break
 			}
 			stickers = append(stickers, tgbotapi.InlineQueryResultCachedSticker{
 				Type:      "sticker",
-				ID:        strconv.Itoa(i),
+				ID:        sticker.UniqueFileId,
 				StickerID: sticker.FileId,
 				Title:     sticker.Text,
 			})
@@ -259,10 +269,55 @@ func (s StickerBot) handleInline(inline *tgbotapi.InlineQuery) {
 			IsPersonal:        user.Private,
 			SwitchPMText:      "Добавить новый",
 			SwitchPMParameter: "add_sticker",
+			NextOffset:        strconv.Itoa(offset + 50),
 		}
 		_, err = s.Bot.AnswerInlineQuery(inlineConfig)
 		if err != nil {
 			log.Printf("Error: %v", err)
+		}
+	}
+
+}
+
+func (s StickerBot) handleResult(inline *tgbotapi.ChosenInlineResult) {
+	user, err := s.Stickers.FindUser(inline.From.ID)
+	if err != nil {
+		log.Printf("Error: %v", err)
+		return
+	}
+	if user == nil {
+		user = &User{UserId: inline.From.ID, Private: false}
+		err := s.Stickers.SaveUser(user)
+		if err != nil {
+			log.Printf("Error: %v", err)
+			return
+		}
+	}
+
+	user.Used = user.Used + 1
+	err = s.Stickers.SaveUser(user)
+	if err != nil {
+		log.Printf("Error: %v", err)
+		return
+	}
+
+	foundStickers := s.Stickers.FindStickersByFileId(inline.ResultID)
+	for _, sticker := range foundStickers {
+		sticker.Used = sticker.Used + 1
+		err := s.Stickers.SaveSticker(&sticker)
+		if err != nil {
+			log.Printf("Error: %v", err)
+			return
+		}
+	}
+
+	foundStickers = s.Stickers.FindPacksStickersByFileId(inline.ResultID)
+	for _, sticker := range foundStickers {
+		sticker.Used = sticker.Used + 1
+		err := s.Stickers.SaveStickerFromPack(&sticker)
+		if err != nil {
+			log.Printf("Error: %v", err)
+			return
 		}
 	}
 

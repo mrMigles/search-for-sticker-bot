@@ -5,6 +5,7 @@ import (
 	"gopkg.in/mgo.v2/bson"
 	"log"
 	"net"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -20,6 +21,13 @@ type Sticker struct {
 	Pack               string `json:"-,"`
 	AddedBy            int    `json:"-,"`
 	Private            bool   `json:"-,"`
+	Used               int    `json:"-,"`
+}
+
+type Emoji struct {
+	bongo.DocumentBase `bson:",inline"`
+	K                  string `json:"k,"`
+	E                  string `json:"e,"`
 }
 
 type StickerPack struct {
@@ -33,6 +41,7 @@ type User struct {
 	bongo.DocumentBase `bson:",inline"`
 	UserId             int  `json:"-,"`
 	Private            bool `json:"-,"`
+	Used               int  `json:"-,"`
 }
 
 type StickerResource struct {
@@ -54,6 +63,10 @@ func NewStickerResource() *StickerResource {
 
 func (m StickerResource) SaveSticker(sticker *Sticker) error {
 	return m.connection.Collection("stickers").Save(sticker)
+}
+
+func (m StickerResource) SaveStickerFromPack(sticker *Sticker) error {
+	return m.connection.Collection("stickers_from_packs").Save(sticker)
 }
 
 func (m StickerResource) SaveStickersFromPack(stickers []Sticker) error {
@@ -117,6 +130,36 @@ func (m StickerResource) FindUser(userId int) (*User, error) {
 	return user, nil
 }
 
+func (m StickerResource) FindPublicStickerByEmojiText(text string) []Sticker {
+	results := m.connection.Collection("emoji").Find(bson.M{"k": strings.ToLower(text)})
+	var emojies []string
+	emoji := &Emoji{}
+	for results.Next(emoji) {
+		emojies = append(emojies, strings.Split(emoji.E, " ")...)
+	}
+	var stickers []Sticker
+	if len(emojies) > 0 {
+		results = m.connection.Collection("stickers_from_packs").Find(bson.M{"emoji": map[string][]string{"$in": emojies}})
+		results.Query.Sort("-used")
+		results.Query.Limit(10000)
+
+		foundPacks := map[string]int{}
+		sticker := &Sticker{}
+		for results.Next(sticker) {
+			count := 1
+			if value, ok := foundPacks[sticker.Pack]; ok {
+				count = value + 1
+				if count >= 5 {
+					continue
+				}
+			}
+			foundPacks[sticker.Pack] = count
+			stickers = append(stickers, *sticker)
+		}
+	}
+	return stickers
+}
+
 func (m StickerResource) FindPublicStickerByPacksText(text string) []Sticker {
 	var results *bongo.ResultSet
 	if utf8.RuneCountInString(text) > 2 {
@@ -139,6 +182,26 @@ func (m StickerResource) FindPublicStickersByText(text string) []Sticker {
 	} else {
 		results = m.connection.Collection("stickers").Find(bson.M{"$and": []map[string]interface{}{{"$or": []map[string]interface{}{{"emoji": text}, {"text": text}}}, {"private": false}}})
 	}
+	var stickers []Sticker
+	sticker := &Sticker{}
+	for results.Next(sticker) {
+		stickers = append(stickers, *sticker)
+	}
+	return stickers
+}
+
+func (m StickerResource) FindStickersByFileId(fileId string) []Sticker {
+	results := m.connection.Collection("stickers").Find(bson.M{"uniquefileid": fileId})
+	var stickers []Sticker
+	sticker := &Sticker{}
+	for results.Next(sticker) {
+		stickers = append(stickers, *sticker)
+	}
+	return stickers
+}
+
+func (m StickerResource) FindPacksStickersByFileId(fileId string) []Sticker {
+	results := m.connection.Collection("stickers_from_packs").Find(bson.M{"uniquefileid": fileId})
 	var stickers []Sticker
 	sticker := &Sticker{}
 	for results.Next(sticker) {
@@ -185,6 +248,13 @@ func (m StickerResource) FindStickersByTextAndUser(text string, user User) []Sti
 	if !user.Private {
 		allStickers := m.FindPublicStickersByText(text)
 		for _, sticker := range allStickers {
+			if !containsSticker(stickers, sticker) {
+				stickers = append(stickers, sticker)
+			}
+		}
+
+		allStickersByEmoji := m.FindPublicStickerByEmojiText(text)
+		for _, sticker := range allStickersByEmoji {
 			if !containsSticker(stickers, sticker) {
 				stickers = append(stickers, sticker)
 			}
